@@ -64,10 +64,11 @@ export function ClockSlider({
     <div
       ref={trackRef}
       className="slider-track select-none"
+      style={{ touchAction: "none" }}
       onMouseMove={(e) => handleMove(e.clientX)}
       onMouseUp={handleEnd}
       onMouseLeave={handleEnd}
-      onTouchMove={(e) => handleMove(e.touches[0].clientX)}
+      onTouchMove={(e) => { e.preventDefault(); handleMove(e.touches[0].clientX); }}
       onTouchEnd={handleEnd}
     >
       {/* Label */}
