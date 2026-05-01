@@ -15,8 +15,9 @@ export function ClockSlider({
   disabled = false,
 }: ClockSliderProps) {
   const trackRef = useRef<HTMLDivElement>(null);
+  const draggingRef = useRef(false);
+  const completeRef = useRef(false);
   const [offsetX, setOffsetX] = useState(0);
-  const [isDragging, setIsDragging] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
 
   const getMaxX = useCallback(() => {
@@ -25,13 +26,13 @@ export function ClockSlider({
   }, []);
 
   const handleStart = useCallback(() => {
-    if (disabled || isComplete) return;
-    setIsDragging(true);
-  }, [disabled, isComplete]);
+    if (disabled || completeRef.current) return;
+    draggingRef.current = true;
+  }, [disabled]);
 
   const handleMove = useCallback(
     (clientX: number) => {
-      if (!isDragging || !trackRef.current) return;
+      if (!draggingRef.current || !trackRef.current) return;
       const rect = trackRef.current.getBoundingClientRect();
       const x = clientX - rect.left - 28;
       const maxX = getMaxX();
@@ -39,26 +40,28 @@ export function ClockSlider({
       setOffsetX(clamped);
 
       if (clamped > maxX * 0.9) {
+        completeRef.current = true;
+        draggingRef.current = false;
         setIsComplete(true);
-        setIsDragging(false);
         onSlideComplete();
         // Reset after animation
         setTimeout(() => {
           setOffsetX(0);
           setIsComplete(false);
+          completeRef.current = false;
         }, 1500);
       }
     },
-    [isDragging, getMaxX, onSlideComplete]
+    [getMaxX, onSlideComplete]
   );
 
   const handleEnd = useCallback(() => {
-    if (!isDragging) return;
-    setIsDragging(false);
-    if (!isComplete) {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    if (!completeRef.current) {
       setOffsetX(0);
     }
-  }, [isDragging, isComplete]);
+  }, []);
 
   return (
     <div
@@ -84,7 +87,7 @@ export function ClockSlider({
         style={{
           transform: `translateX(${offsetX}px)`,
           backgroundColor: isComplete ? "#4ade80" : "#ffffff",
-          transition: isDragging ? "none" : "transform 0.3s ease-out, background-color 0.2s",
+          transition: draggingRef.current ? "none" : "transform 0.3s ease-out, background-color 0.2s",
         }}
         onMouseDown={handleStart}
         onTouchStart={handleStart}

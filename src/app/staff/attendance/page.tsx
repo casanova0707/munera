@@ -9,10 +9,12 @@ import { GlassCard } from "@/components/ui/glass-card";
 import { LoadingSpinner } from "@/components/shared/loading-spinner";
 import { useGeolocation } from "@/hooks/use-geolocation";
 import { useAttendanceStatus } from "@/hooks/use-attendance-status";
+import { useToast } from "@/components/ui/toast";
 import { useState } from "react";
 
 export default function StaffAttendancePage() {
   const { status, todayClocks, isLoading, reload } = useAttendanceStatus();
+  const { toast } = useToast();
   const [isOffsiteModalOpen, setIsOffsiteModalOpen] = useState(false);
   const [offsiteDistance, setOffsiteDistance] = useState(0);
   const [offsiteWorkplace, setOffsiteWorkplace] = useState("最寄り拠点");
@@ -49,11 +51,16 @@ export default function StaffAttendancePage() {
 
       if (data.success) {
         await reload();
+        const labels = { clock_in: "出勤", clock_out: "退勤", break_end: "休憩終了" };
+        toast(`${labels[recordType]}を記録しました`, "success");
+      } else {
+        toast(data.error ?? "打刻に失敗しました", "error");
       }
     } catch (err) {
-      console.error("Clock action failed:", err);
+      const msg = err instanceof Error ? err.message : "不明なエラー";
+      toast(`打刻エラー: ${msg}`, "error");
     }
-  }, [status, getPosition, reload]);
+  }, [status, getPosition, reload, toast]);
 
   const handleOffsiteSubmit = async (reason: string) => {
     if (!position) return;
