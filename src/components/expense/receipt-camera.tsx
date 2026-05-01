@@ -6,9 +6,10 @@ import { Button } from "@/components/ui/button";
 
 interface ReceiptCameraProps {
   onCapture: (imageData: string) => void;
+  capturedImage?: string;
 }
 
-export function ReceiptCamera({ onCapture }: ReceiptCameraProps) {
+export function ReceiptCamera({ onCapture, capturedImage }: ReceiptCameraProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<string | null>(null);
 
@@ -30,7 +31,7 @@ export function ReceiptCamera({ onCapture }: ReceiptCameraProps) {
   const confirm = useCallback(() => {
     if (preview) {
       onCapture(preview);
-      setPreview(null);
+      setPreview(null); // プレビューモードを終了、親のcapturedImageで表示
     }
   }, [preview, onCapture]);
 
@@ -53,6 +54,28 @@ export function ReceiptCamera({ onCapture }: ReceiptCameraProps) {
             この画像を使用
           </Button>
         </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          onChange={handleFileChange}
+          className="hidden"
+        />
+      </div>
+    );
+  }
+
+  // 確定済みの画像がある場合はサムネイル表示
+  if (capturedImage) {
+    return (
+      <div className="space-y-2">
+        <div className="relative rounded-3xl overflow-hidden">
+          <img src={capturedImage} alt="Receipt" className="w-full max-h-40 object-cover" />
+        </div>
+        <Button variant="ghost" size="md" onClick={() => { onCapture(""); fileInputRef.current?.click(); }} className="w-full gap-2">
+          <RotateCcw className="w-4 h-4" /> 撮り直し
+        </Button>
         <input
           ref={fileInputRef}
           type="file"

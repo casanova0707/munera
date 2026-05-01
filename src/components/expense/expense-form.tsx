@@ -43,7 +43,7 @@ export function ExpenseForm({
 
   return (
     <div className="space-y-4">
-      <ReceiptCamera onCapture={setReceiptImage} />
+      <ReceiptCamera onCapture={setReceiptImage} capturedImage={receiptImage} />
 
       <GlassCard className="p-6 space-y-4">
         <div className="flex justify-between items-center border-b border-white/5 pb-3">

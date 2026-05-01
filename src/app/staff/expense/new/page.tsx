@@ -7,9 +7,11 @@ import { LoadingSpinner } from "@/components/shared/loading-spinner";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { useToast } from "@/components/ui/toast";
 
 export default function NewExpensePage() {
   const router = useRouter();
+  const { toast } = useToast();
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -44,9 +46,17 @@ export default function NewExpensePage() {
         body: JSON.stringify(data),
       });
 
-      if (res.ok) {
+      const result = await res.json();
+
+      if (res.ok && result.success) {
+        toast("経費を申請しました", "success");
         router.push("/staff/expense");
+      } else {
+        const errMsg = typeof result.error === "string" ? result.error : JSON.stringify(result.error);
+        toast(`申請エラー: ${errMsg}`, "error");
       }
+    } catch (err) {
+      toast("経費申請に失敗しました", "error");
     } finally {
       setIsSubmitting(false);
     }

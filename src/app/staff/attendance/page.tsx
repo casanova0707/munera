@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { ClockSlider } from "@/components/attendance/clock-slider";
 import { StatusCircle } from "@/components/attendance/status-circle";
 import { GpsStatus } from "@/components/attendance/gps-status";
@@ -19,8 +19,11 @@ export default function StaffAttendancePage() {
   const [offsiteDistance, setOffsiteDistance] = useState(0);
   const [offsiteWorkplace, setOffsiteWorkplace] = useState("最寄り拠点");
   const { position, isLoading: gpsLoading, getPosition } = useGeolocation();
+  const processingRef = useRef(false);
 
   const handleClockAction = useCallback(async () => {
+    if (processingRef.current) return;
+    processingRef.current = true;
     try {
       let latitude: number | undefined;
       let longitude: number | undefined;
@@ -68,6 +71,8 @@ export default function StaffAttendancePage() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "不明なエラー";
       toast(`打刻エラー: ${msg}`, "error");
+    } finally {
+      setTimeout(() => { processingRef.current = false; }, 2000);
     }
   }, [status, getPosition, reload, toast]);
 
