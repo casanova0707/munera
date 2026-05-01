@@ -3,7 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { GlassCard } from "@/components/ui/glass-card";
 import { Button } from "@/components/ui/button";
-import { Smartphone, Mail } from "lucide-react";
+import { Mail } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Suspense } from "react";
 
@@ -70,16 +70,6 @@ function LoginContent() {
           </svg>
           Google でログイン
         </Button>
-
-        <a href="/login/line">
-          <Button
-            size="lg"
-            className="bg-[#06C755] text-white hover:bg-[#05b34d] gap-3 mt-4"
-          >
-            <Smartphone className="w-5 h-5" />
-            LINE でログイン
-          </Button>
-        </a>
 
         <div className="relative py-2">
           <div className="absolute inset-0 flex items-center">

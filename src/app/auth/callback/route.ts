@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
@@ -27,11 +28,30 @@ export async function GET(request: Request) {
     return NextResponse.redirect(`${origin}/login?error=auth_failed`);
   }
 
-  const { data: coreUser } = await supabase
+  let { data: coreUser } = await supabase
     .from("core_users")
     .select("id, role")
     .eq("supabase_auth_id", user.id)
     .single();
+
+  // If not found by auth ID, try matching by email and link the account
+  if (!coreUser && user.email) {
+    const adminClient = createAdminClient();
+    const { data: matchedByEmail } = await adminClient
+      .from("core_users")
+      .select("id, role")
+      .eq("email", user.email)
+      .single();
+
+    if (matchedByEmail) {
+      // Link this Supabase auth ID to the pre-registered core_user (bypass RLS)
+      await adminClient
+        .from("core_users")
+        .update({ supabase_auth_id: user.id })
+        .eq("id", matchedByEmail.id);
+      coreUser = matchedByEmail;
+    }
+  }
 
   let dest = "/login?error=no_account";
   if (coreUser) {

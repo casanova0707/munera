@@ -119,7 +119,7 @@ export default function AdminUsersPage() {
       email: form.email || null,
       department: form.department || null,
       role: form.role,
-      auth_method: form.role === "staff" ? "line" : "email",
+      auth_method: "email",
     });
 
     if (error) {
