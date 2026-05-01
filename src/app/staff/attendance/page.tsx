@@ -22,7 +22,16 @@ export default function StaffAttendancePage() {
 
   const handleClockAction = useCallback(async () => {
     try {
-      const pos = await getPosition();
+      let latitude: number | undefined;
+      let longitude: number | undefined;
+
+      try {
+        const pos = await getPosition();
+        latitude = pos.latitude;
+        longitude = pos.longitude;
+      } catch {
+        // GPS取得失敗でも打刻は続行
+      }
 
       const recordType =
         status === "off_duty"
@@ -36,8 +45,8 @@ export default function StaffAttendancePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           record_type: recordType,
-          latitude: pos.latitude,
-          longitude: pos.longitude,
+          latitude,
+          longitude,
         }),
       });
 

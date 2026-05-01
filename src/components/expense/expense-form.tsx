@@ -51,7 +51,7 @@ export function ExpenseForm({
           <select
             value={categoryId}
             onChange={(e) => setCategoryId(e.target.value)}
-            className="bg-transparent text-right outline-none text-sm appearance-none cursor-pointer text-white"
+            className="bg-transparent text-right outline-none text-sm cursor-pointer text-white min-w-[120px] min-h-[44px]"
           >
             <option value="" className="bg-black">選択...</option>
             {categories.map((c) => (
