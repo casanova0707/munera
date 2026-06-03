@@ -3,15 +3,16 @@
 import { useState, useCallback, useEffect } from "react";
 import { GlassCard } from "@/components/ui/glass-card";
 import { LoadingSpinner } from "@/components/shared/loading-spinner";
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, X, Settings } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import Link from "next/link";
 
 // ── Types ──
 interface ShiftPattern {
   id: string;
   name: string;
-  color: string;
-  dotColor: string;
+  label: string; // 短縮ラベル（1文字）
+  bgColor: string;
   textColor: string;
   hoursPerDay: number;
 }
@@ -21,21 +22,22 @@ interface StaffMember {
   name: string;
 }
 
-type CellValue = string | null; // shift_id or null
+type CellValue = string | null; // shift_id or OFF_MARKER or null
 
 const OFF_MARKER = "__off__";
 const DOW_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
 
-// Color palette for shifts
-const COLORS = [
-  { color: "bg-blue-500", dotColor: "bg-blue-400", textColor: "text-blue-400" },
-  { color: "bg-emerald-500", dotColor: "bg-emerald-400", textColor: "text-emerald-400" },
-  { color: "bg-purple-500", dotColor: "bg-purple-400", textColor: "text-purple-400" },
-  { color: "bg-amber-500", dotColor: "bg-amber-400", textColor: "text-amber-400" },
-  { color: "bg-cyan-500", dotColor: "bg-cyan-400", textColor: "text-cyan-400" },
+// Color palette for shifts (背景色ベース)
+const SHIFT_COLORS = [
+  { bgColor: "bg-blue-600", textColor: "text-white" },
+  { bgColor: "bg-emerald-600", textColor: "text-white" },
+  { bgColor: "bg-purple-600", textColor: "text-white" },
+  { bgColor: "bg-amber-500", textColor: "text-black" },
+  { bgColor: "bg-cyan-600", textColor: "text-white" },
+  { bgColor: "bg-rose-600", textColor: "text-white" },
+  { bgColor: "bg-indigo-600", textColor: "text-white" },
+  { bgColor: "bg-teal-600", textColor: "text-white" },
 ];
-
-const OFF_STYLE = { color: "bg-zinc-700", dotColor: "bg-zinc-600", textColor: "text-zinc-600" };
 
 export default function AdminShiftsPage() {
   const [year, setYear] = useState(() => {
@@ -50,15 +52,17 @@ export default function AdminShiftsPage() {
   const [patterns, setPatterns] = useState<ShiftPattern[]>([]);
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [grid, setGrid] = useState<Record<string, CellValue[]>>({});
-  const [editingCell, setEditingCell] = useState<{ staffId: string; day: number } | null>(null);
-  const [popupPos, setPopupPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [selectedStaff, setSelectedStaff] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [tenantId, setTenantId] = useState<string | null>(null);
 
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
 
   const patternMap = new Map(patterns.map((p) => [p.id, p]));
+
+  // シフトの循環順序: パターン1 → パターン2 → ... → 休 → クリア → パターン1
+  const cycleOrder: CellValue[] = [...patterns.map((p) => p.id), OFF_MARKER, null];
 
   // ── Load data ──
   const load = useCallback(async () => {
@@ -73,6 +77,7 @@ export default function AdminShiftsPage() {
       .eq("supabase_auth_id", user.id)
       .single();
     if (!coreUser) { setIsLoading(false); return; }
+    setTenantId(coreUser.tenant_id);
 
     // Load shifts (patterns)
     const { data: shifts } = await supabase
@@ -86,9 +91,11 @@ export default function AdminShiftsPage() {
       const [sh, sm] = s.start_time.split(":").map(Number);
       const [eh, em] = s.end_time.split(":").map(Number);
       let hours = (eh * 60 + em - sh * 60 - sm - s.break_minutes) / 60;
-      if (hours < 0) hours += 24; // night shift
-      const c = COLORS[i % COLORS.length];
-      return { id: s.id, name: s.name, hoursPerDay: Math.round(hours * 10) / 10, ...c };
+      if (hours < 0) hours += 24;
+      const c = SHIFT_COLORS[i % SHIFT_COLORS.length];
+      // 短縮ラベル: 最初の1文字
+      const label = s.name.charAt(0);
+      return { id: s.id, name: s.name, label, hoursPerDay: Math.round(hours * 10) / 10, ...c };
     });
     setPatterns(shiftPatterns);
 
@@ -136,49 +143,35 @@ export default function AdminShiftsPage() {
   const prevMonth = () => {
     if (month === 0) { setYear(year - 1); setMonth(11); }
     else { setMonth(month - 1); }
-    setSelectedStaff(null);
   };
   const nextMonth = () => {
     if (month === 11) { setYear(year + 1); setMonth(0); }
     else { setMonth(month + 1); }
-    setSelectedStaff(null);
   };
 
-  // ── Cell click ──
-  const handleCellClick = useCallback((staffId: string, dayIndex: number, e: React.MouseEvent) => {
-    setEditingCell((prev) =>
-      prev?.staffId === staffId && prev?.day === dayIndex ? null : { staffId, day: dayIndex }
-    );
-    setPopupPos({ x: e.clientX, y: e.clientY });
-  }, []);
+  // ── セルタップ → シフト循環切り替え ──
+  const handleCellTap = useCallback(async (staffId: string, dayIndex: number) => {
+    // 選択中のスタッフのみ編集可能
+    if (selectedStaff !== staffId) return;
 
-  // ── Shift select ──
-  const handleShiftSelect = useCallback(async (value: CellValue) => {
-    if (!editingCell) return;
-    const { staffId, day } = editingCell;
+    const currentValue = grid[staffId]?.[dayIndex] ?? null;
+    const currentIdx = cycleOrder.indexOf(currentValue);
+    const nextIdx = (currentIdx + 1) % cycleOrder.length;
+    const nextValue = cycleOrder[nextIdx];
 
+    // UIを即座に更新
     setGrid((prev) => {
       const updated = { ...prev };
       updated[staffId] = [...(updated[staffId] ?? [])];
-      updated[staffId][day] = value;
+      updated[staffId][dayIndex] = nextValue;
       return updated;
     });
-    setEditingCell(null);
 
-    // Save to DB
+    // DB保存
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-    const { data: coreUser } = await supabase
-      .from("core_users")
-      .select("tenant_id")
-      .eq("supabase_auth_id", user.id)
-      .single();
-    if (!coreUser) return;
+    const workDate = `${year}-${(month + 1).toString().padStart(2, "0")}-${(dayIndex + 1).toString().padStart(2, "0")}`;
 
-    const workDate = `${year}-${(month + 1).toString().padStart(2, "0")}-${(day + 1).toString().padStart(2, "0")}`;
-
-    if (value === null) {
+    if (nextValue === null) {
       await supabase
         .from("attn_shift_assignments")
         .delete()
@@ -188,14 +181,14 @@ export default function AdminShiftsPage() {
       await supabase
         .from("attn_shift_assignments")
         .upsert({
-          tenant_id: coreUser.tenant_id,
+          tenant_id: tenantId,
           user_id: staffId,
-          shift_id: value === OFF_MARKER ? null : value,
+          shift_id: nextValue === OFF_MARKER ? null : nextValue,
           work_date: workDate,
-          is_day_off: value === OFF_MARKER,
+          is_day_off: nextValue === OFF_MARKER,
         }, { onConflict: "user_id,work_date" });
     }
-  }, [editingCell, year, month]);
+  }, [selectedStaff, grid, cycleOrder, tenantId, year, month]);
 
   // ── Summaries ──
   const staffSummary = (staffId: string) => {
@@ -211,17 +204,6 @@ export default function AdminShiftsPage() {
     });
     return { workDays, hours, totalDays: daysInMonth };
   };
-
-  const staffNames = staff.reduce((map, s) => { map.set(s.id, s.name); return map; }, new Map<string, string>());
-
-  const dailyTotals = days.map((_, i) =>
-    staff.reduce((sum, s) => {
-      const cell = grid[s.id]?.[i];
-      return sum + (cell && cell !== OFF_MARKER ? 1 : 0);
-    }, 0)
-  );
-
-  const totalPlanned = staff.reduce((sum, s) => sum + staffSummary(s.id).hours, 0);
 
   const getWeeklySummary = (staffId: string) => {
     const cells = grid[staffId] ?? [];
@@ -241,217 +223,328 @@ export default function AdminShiftsPage() {
     return weeks.filter(Boolean);
   };
 
+  const totalPlanned = staff.reduce((sum, s) => sum + staffSummary(s.id).hours, 0);
+
   if (isLoading) return <LoadingSpinner />;
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3 flex-wrap">
+          <Link
+            href="/admin/shifts/patterns"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white text-xs transition-all"
+          >
+            <Settings className="w-3.5 h-3.5" />
+            パターン設定
+          </Link>
           <GlassCard className="inline-flex items-center px-4 py-2 gap-1">
-            <span className="text-xs text-zinc-500 mr-1">予定</span>
+            <span className="text-xs text-zinc-400 mr-1">予定</span>
             <span className="text-lg font-medium text-emerald-400">{totalPlanned}</span>
-            <span className="text-xs text-zinc-500">h</span>
+            <span className="text-xs text-zinc-400">h</span>
           </GlassCard>
           <GlassCard className="inline-flex items-center px-4 py-2 gap-1">
-            <span className="text-xs text-zinc-500 mr-1">人数</span>
+            <span className="text-xs text-zinc-400 mr-1">人数</span>
             <span className="text-lg font-medium">{staff.length}</span>
-            <span className="text-xs text-zinc-500">名</span>
+            <span className="text-xs text-zinc-400">名</span>
           </GlassCard>
-          <div className="flex items-center gap-4 ml-6">
-            {patterns.map((p) => (
-              <div key={p.id} className="flex items-center gap-1.5">
-                <span className={`w-2.5 h-2.5 rounded-full ${p.dotColor}`} />
-                <span className="text-xs text-zinc-500">{p.name}</span>
-              </div>
-            ))}
-            <div className="flex items-center gap-1.5">
-              <span className={`w-2.5 h-2.5 rounded-full ${OFF_STYLE.dotColor}`} />
-              <span className="text-xs text-zinc-500">休</span>
-            </div>
-          </div>
         </div>
         <div className="flex items-center gap-4">
-          <button onClick={prevMonth} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors">
-            <ChevronLeft className="w-4 h-4 text-zinc-400" />
+          <button onClick={prevMonth} className="p-2 rounded-lg hover:bg-white/10 transition-colors">
+            <ChevronLeft className="w-5 h-5 text-zinc-300" />
           </button>
-          <span className="text-sm font-medium min-w-[100px] text-center">
+          <span className="text-base font-medium min-w-[120px] text-center">
             {year}年{month + 1}月
           </span>
-          <button onClick={nextMonth} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors">
-            <ChevronRight className="w-4 h-4 text-zinc-400" />
+          <button onClick={nextMonth} className="p-2 rounded-lg hover:bg-white/10 transition-colors">
+            <ChevronRight className="w-5 h-5 text-zinc-300" />
           </button>
         </div>
       </div>
 
-      {/* Grid */}
-      <GlassCard className="overflow-x-auto">
-        <table className="w-full text-xs border-collapse">
-          <thead>
-            <tr className="border-b border-white/10">
-              <th className="sticky left-0 z-10 bg-black/80 backdrop-blur-sm text-left p-2 text-[10px] text-zinc-500 w-28 min-w-[112px]">日別合計</th>
-              {days.map((d, i) => (
-                <th key={d} className="p-1 text-center min-w-[32px]">
-                  <span className={`text-[10px] font-medium ${dailyTotals[i] === 0 ? "text-zinc-700" : dailyTotals[i] >= staff.length * 0.8 ? "text-emerald-400" : "text-zinc-400"}`}>
-                    {dailyTotals[i]}
-                  </span>
-                </th>
-              ))}
-              <th className="sticky right-0 z-10 bg-black/80 backdrop-blur-sm p-2 min-w-[72px]" />
-            </tr>
-            <tr className="border-b border-white/10">
-              <th className="sticky left-0 z-10 bg-black/80 backdrop-blur-sm text-left p-2 text-[10px] text-zinc-500 w-28 min-w-[112px]">スタッフ</th>
-              {days.map((d) => {
-                const dow = new Date(year, month, d).getDay();
-                const isSunday = dow === 0;
-                const isWeekend = dow === 0 || dow === 6;
-                return (
-                  <th key={d} className="p-1 text-center min-w-[32px]">
-                    <div className={`text-[10px] ${isSunday ? "text-red-400" : isWeekend ? "text-blue-400" : "text-zinc-600"}`}>{DOW_LABELS[dow]}</div>
-                    <div className={`text-xs font-medium ${isSunday ? "text-red-400" : isWeekend ? "text-blue-400" : "text-zinc-300"}`}>{d}</div>
-                  </th>
-                );
-              })}
-              <th className="sticky right-0 z-10 bg-black/80 backdrop-blur-sm p-2 text-[10px] text-zinc-500 text-center min-w-[72px]">合計</th>
-            </tr>
-          </thead>
-          <tbody>
-            {staff.map((s) => {
-              const summary = staffSummary(s.id);
-              const isSelected = selectedStaff === s.id;
-              return (
-                <tr key={s.id} className={`border-b border-white/5 transition-colors ${isSelected ? "bg-white/[0.04]" : "hover:bg-white/[0.02]"}`}>
-                  <td className="sticky left-0 z-10 bg-black/80 backdrop-blur-sm p-2">
-                    <button
-                      onClick={() => setSelectedStaff(isSelected ? null : s.id)}
-                      className={`text-xs font-medium text-left truncate w-full transition-colors ${isSelected ? "text-blue-400" : "hover:text-blue-400"}`}
-                    >
-                      {s.name}
-                    </button>
-                  </td>
-                  {(grid[s.id] ?? []).map((cell, i) => {
-                    const pattern = cell && cell !== OFF_MARKER ? patternMap.get(cell) : null;
-                    const isOff = cell === OFF_MARKER;
-                    const isEditing = editingCell?.staffId === s.id && editingCell?.day === i;
-                    return (
-                      <td key={i} className="p-1 text-center relative">
-                        <button
-                          onClick={(e) => handleCellClick(s.id, i, e)}
-                          className="w-full flex items-center justify-center py-1 rounded hover:bg-white/10 transition-colors"
-                        >
-                          {pattern ? (
-                            <span className={`w-3 h-3 rounded-full ${pattern.dotColor}`} />
-                          ) : isOff ? (
-                            <span className={`w-3 h-3 rounded-full ${OFF_STYLE.dotColor} opacity-30`} />
-                          ) : (
-                            <span className="w-3 h-3" />
-                          )}
-                        </button>
-                        {isEditing && (
-                          <div className="fixed z-50" style={{ left: popupPos.x - 28, top: popupPos.y + 10 }}>
-                            <div className="bg-zinc-900 border border-white/10 rounded-xl p-1.5 shadow-2xl flex flex-col gap-0.5 min-w-[56px]">
-                              {patterns.map((p) => (
-                                <button
-                                  key={p.id}
-                                  onClick={() => handleShiftSelect(p.id)}
-                                  className={`flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-white/10 text-[10px] ${p.textColor} transition-colors`}
-                                >
-                                  <span className={`w-2 h-2 rounded-full ${p.dotColor}`} />
-                                  {p.name}
-                                </button>
-                              ))}
-                              <button
-                                onClick={() => handleShiftSelect(OFF_MARKER)}
-                                className={`flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-white/10 text-[10px] ${OFF_STYLE.textColor} transition-colors`}
-                              >
-                                <span className={`w-2 h-2 rounded-full ${OFF_STYLE.dotColor}`} />
-                                休
-                              </button>
-                              {cell && (
-                                <button
-                                  onClick={() => handleShiftSelect(null)}
-                                  className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-white/10 text-[10px] text-zinc-500 transition-colors border-t border-white/5 mt-0.5 pt-1"
-                                >
-                                  クリア
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </td>
-                    );
-                  })}
-                  <td className="sticky right-0 z-10 bg-black/80 backdrop-blur-sm p-2 text-center">
-                    <span className={`text-xs font-medium ${summary.hours > 160 ? "text-red-400" : "text-emerald-400"}`}>{summary.workDays}日</span>
-                    <span className="text-[10px] text-zinc-500 ml-1">{summary.hours}h</span>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </GlassCard>
-
-      {/* Staff detail panel */}
-      {selectedStaff && (
-        <GlassCard className="p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-medium">
-              {staffNames.get(selectedStaff)}
-              <span className="text-zinc-500 ml-2 font-normal">{year}年{month + 1}月 月間サマリー</span>
-            </h3>
-            <button onClick={() => setSelectedStaff(null)} className="p-1 rounded-lg hover:bg-white/10 transition-colors">
-              <X className="w-4 h-4 text-zinc-500" />
-            </button>
+      {/* 凡例 + タップ説明 */}
+      <div className="flex items-center gap-3 flex-wrap">
+        {patterns.map((p) => (
+          <div key={p.id} className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg ${p.bgColor}`}>
+            <span className={`text-xs font-bold ${p.textColor}`}>{p.label}</span>
+            <span className={`text-xs ${p.textColor} opacity-80`}>{p.name}</span>
           </div>
+        ))}
+        <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-700">
+          <span className="text-xs font-bold text-zinc-300">休</span>
+        </div>
+        {selectedStaff && (
+          <span className="text-xs text-zinc-400 ml-2">
+            タップでシフト切替: {patterns.map((p) => p.label).join(" → ")} → 休 → クリア
+          </span>
+        )}
+      </div>
 
-          <div className="grid grid-cols-4 gap-4 mb-6">
-            {(() => {
-              const s = staffSummary(selectedStaff);
-              return (
-                <>
-                  <div className="text-center">
-                    <p className="text-[10px] text-zinc-500 uppercase tracking-widest">出勤日数</p>
-                    <p className="text-2xl font-light mt-1">{s.workDays}<span className="text-sm text-zinc-500">日</span></p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-[10px] text-zinc-500 uppercase tracking-widest">月間時間</p>
-                    <p className="text-2xl font-light mt-1">{s.hours}<span className="text-sm text-zinc-500">h</span></p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-[10px] text-zinc-500 uppercase tracking-widest">目安との差</p>
-                    <p className={`text-2xl font-light mt-1 ${s.hours - 160 > 0 ? "text-red-400" : s.hours - 160 === 0 ? "text-emerald-400" : "text-yellow-400"}`}>
-                      {s.hours - 160 >= 0 ? "+" : ""}{s.hours - 160}<span className="text-sm text-zinc-500">h</span>
-                    </p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-[10px] text-zinc-500 uppercase tracking-widest">休日数</p>
-                    <p className="text-2xl font-light mt-1">{s.totalDays - s.workDays}<span className="text-sm text-zinc-500">日</span></p>
-                  </div>
-                </>
-              );
-            })()}
-          </div>
+      {/* スタッフ選択 */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs text-zinc-400 mr-1">編集対象:</span>
+        {staff.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => setSelectedStaff(selectedStaff === s.id ? null : s.id)}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+              selectedStaff === s.id
+                ? "bg-blue-600 text-white ring-2 ring-blue-400"
+                : "bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-zinc-200"
+            }`}
+          >
+            {s.name}
+          </button>
+        ))}
+      </div>
 
+      {/* Calendar Grid */}
+      <GlassCard className="overflow-x-auto p-4">
+        {selectedStaff ? (
+          // 選択中のスタッフのカレンダー（大きいセル）
           <div>
-            <p className="text-[10px] text-zinc-500 uppercase tracking-widest mb-3">週別内訳</p>
-            <div className="grid grid-cols-5 gap-3">
-              {getWeeklySummary(selectedStaff).map((w) => (
-                <GlassCard key={w.weekNum} className="p-3 text-center">
-                  <p className="text-[10px] text-zinc-500">W{w.weekNum}</p>
-                  <p className={`text-lg font-light mt-0.5 ${w.hours > 40 ? "text-red-400" : "text-white"}`}>
-                    {w.hours}<span className="text-[10px] text-zinc-500">h</span>
-                  </p>
-                  <p className="text-[10px] text-zinc-500 mt-0.5">{w.days}日</p>
-                </GlassCard>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-medium text-white">
+                {staff.find((s) => s.id === selectedStaff)?.name}
+                <span className="text-zinc-400 ml-2 font-normal">のシフト</span>
+              </h3>
+              <button
+                onClick={() => setSelectedStaff(null)}
+                className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"
+              >
+                <X className="w-4 h-4 text-zinc-400" />
+              </button>
+            </div>
+
+            {/* 曜日ヘッダー */}
+            <div className="grid grid-cols-7 gap-1 mb-1">
+              {DOW_LABELS.map((label, i) => (
+                <div
+                  key={label}
+                  className={`text-center text-xs font-medium py-1 ${
+                    i === 0 ? "text-red-400" : i === 6 ? "text-blue-400" : "text-zinc-400"
+                  }`}
+                >
+                  {label}
+                </div>
               ))}
             </div>
-            {getWeeklySummary(selectedStaff).some((w) => w.hours > 40) && (
-              <p className="text-xs text-red-400 mt-3">⚠ 週40時間を超過している週があります</p>
-            )}
+
+            {/* カレンダーセル */}
+            <div className="grid grid-cols-7 gap-1">
+              {/* 月初の空セル */}
+              {Array.from({ length: new Date(year, month, 1).getDay() }, (_, i) => (
+                <div key={`empty-${i}`} className="aspect-square" />
+              ))}
+
+              {days.map((d) => {
+                const dayIndex = d - 1;
+                const cell = grid[selectedStaff]?.[dayIndex] ?? null;
+                const pattern = cell && cell !== OFF_MARKER ? patternMap.get(cell) : null;
+                const isOff = cell === OFF_MARKER;
+                const dow = new Date(year, month, d).getDay();
+
+                return (
+                  <button
+                    key={d}
+                    onClick={() => handleCellTap(selectedStaff, dayIndex)}
+                    className={`aspect-square rounded-xl flex flex-col items-center justify-center transition-all active:scale-95 ${
+                      pattern
+                        ? `${pattern.bgColor} shadow-lg`
+                        : isOff
+                        ? "bg-zinc-800 border border-zinc-700"
+                        : "bg-white/5 border border-white/10 hover:border-white/20"
+                    }`}
+                  >
+                    <span
+                      className={`text-xs ${
+                        pattern
+                          ? `${pattern.textColor} opacity-70`
+                          : dow === 0
+                          ? "text-red-400"
+                          : dow === 6
+                          ? "text-blue-400"
+                          : "text-zinc-400"
+                      }`}
+                    >
+                      {d}
+                    </span>
+                    <span
+                      className={`text-sm font-bold mt-0.5 ${
+                        pattern
+                          ? pattern.textColor
+                          : isOff
+                          ? "text-zinc-500"
+                          : "text-transparent"
+                      }`}
+                    >
+                      {pattern ? pattern.label : isOff ? "休" : "・"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* 月間サマリー */}
+            <div className="grid grid-cols-4 gap-4 mt-6">
+              {(() => {
+                const s = staffSummary(selectedStaff);
+                return (
+                  <>
+                    <div className="text-center">
+                      <p className="text-xs text-zinc-400">出勤日数</p>
+                      <p className="text-2xl font-light mt-1">
+                        {s.workDays}
+                        <span className="text-sm text-zinc-500">日</span>
+                      </p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-zinc-400">月間時間</p>
+                      <p className="text-2xl font-light mt-1">
+                        {s.hours}
+                        <span className="text-sm text-zinc-500">h</span>
+                      </p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-zinc-400">目安との差</p>
+                      <p
+                        className={`text-2xl font-light mt-1 ${
+                          s.hours - 160 > 0
+                            ? "text-red-400"
+                            : s.hours - 160 === 0
+                            ? "text-emerald-400"
+                            : "text-yellow-400"
+                        }`}
+                      >
+                        {s.hours - 160 >= 0 ? "+" : ""}
+                        {s.hours - 160}
+                        <span className="text-sm text-zinc-500">h</span>
+                      </p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-zinc-400">休日数</p>
+                      <p className="text-2xl font-light mt-1">
+                        {s.totalDays - s.workDays}
+                        <span className="text-sm text-zinc-500">日</span>
+                      </p>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* 週別内訳 */}
+            <div className="mt-6">
+              <p className="text-xs text-zinc-400 mb-3">週別内訳</p>
+              <div className="grid grid-cols-5 gap-3">
+                {getWeeklySummary(selectedStaff).map((w) => (
+                  <GlassCard key={w.weekNum} className="p-3 text-center">
+                    <p className="text-xs text-zinc-500">W{w.weekNum}</p>
+                    <p
+                      className={`text-lg font-light mt-0.5 ${
+                        w.hours > 40 ? "text-red-400" : "text-white"
+                      }`}
+                    >
+                      {w.hours}
+                      <span className="text-xs text-zinc-500">h</span>
+                    </p>
+                    <p className="text-xs text-zinc-500 mt-0.5">{w.days}日</p>
+                  </GlassCard>
+                ))}
+              </div>
+              {getWeeklySummary(selectedStaff).some((w) => w.hours > 40) && (
+                <p className="text-xs text-red-400 mt-3">
+                  ⚠ 週40時間を超過している週があります
+                </p>
+              )}
+            </div>
           </div>
-        </GlassCard>
-      )}
+        ) : (
+          // 全員一覧（読み取り専用のコンパクト表示）
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="border-b border-white/10">
+                <th className="sticky left-0 z-10 bg-black/80 backdrop-blur-sm text-left p-2 text-xs text-zinc-400 w-28 min-w-[112px]">
+                  スタッフ
+                </th>
+                {days.map((d) => {
+                  const dow = new Date(year, month, d).getDay();
+                  return (
+                    <th key={d} className="p-1 text-center min-w-[36px]">
+                      <div
+                        className={`text-[10px] ${
+                          dow === 0 ? "text-red-400" : dow === 6 ? "text-blue-400" : "text-zinc-500"
+                        }`}
+                      >
+                        {DOW_LABELS[dow]}
+                      </div>
+                      <div
+                        className={`text-xs font-medium ${
+                          dow === 0 ? "text-red-400" : dow === 6 ? "text-blue-400" : "text-zinc-300"
+                        }`}
+                      >
+                        {d}
+                      </div>
+                    </th>
+                  );
+                })}
+                <th className="sticky right-0 z-10 bg-black/80 backdrop-blur-sm p-2 text-xs text-zinc-400 text-center min-w-[72px]">
+                  合計
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {staff.map((s) => {
+                const summary = staffSummary(s.id);
+                return (
+                  <tr
+                    key={s.id}
+                    className="border-b border-white/5 hover:bg-white/[0.03] cursor-pointer transition-colors"
+                    onClick={() => setSelectedStaff(s.id)}
+                  >
+                    <td className="sticky left-0 z-10 bg-black/80 backdrop-blur-sm p-2">
+                      <span className="text-xs font-medium text-zinc-200 hover:text-blue-400 transition-colors">
+                        {s.name}
+                      </span>
+                    </td>
+                    {(grid[s.id] ?? []).map((cell, i) => {
+                      const pattern =
+                        cell && cell !== OFF_MARKER ? patternMap.get(cell) : null;
+                      const isOff = cell === OFF_MARKER;
+                      return (
+                        <td key={i} className="p-0.5 text-center">
+                          <div
+                            className={`w-full py-1 rounded text-[10px] font-bold ${
+                              pattern
+                                ? `${pattern.bgColor} ${pattern.textColor}`
+                                : isOff
+                                ? "bg-zinc-800 text-zinc-500"
+                                : ""
+                            }`}
+                          >
+                            {pattern ? pattern.label : isOff ? "休" : ""}
+                          </div>
+                        </td>
+                      );
+                    })}
+                    <td className="sticky right-0 z-10 bg-black/80 backdrop-blur-sm p-2 text-center">
+                      <span
+                        className={`text-xs font-medium ${
+                          summary.hours > 160 ? "text-red-400" : "text-emerald-400"
+                        }`}
+                      >
+                        {summary.workDays}日
+                      </span>
+                      <span className="text-[10px] text-zinc-400 ml-1">{summary.hours}h</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </GlassCard>
     </div>
   );
 }
